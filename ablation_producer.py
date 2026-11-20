@@ -17,8 +17,8 @@ import time
 RUN_ID = time.strftime("%Y%m%d-%H%M%S")
 
 SOLIDITY_DIR = Path(
-    "/mnt/data/sc-developer-study-1/"
-    "Empirical Evaluation of Security Analyzers/Solidity"
+    os.getenv("PATHFINDER_DATASET_DIR")
+    or "/home/frost-walk/Research/Solidity"
 )
 OUT_CSV = Path("ablation_results.csv")
 

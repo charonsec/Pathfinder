@@ -2,12 +2,19 @@ import fcntl
 import os
 import re
 import subprocess
+import shutil
 from pathlib import Path
 
 from .celery_app import app
 
-SLITHER_BIN = str(Path(__file__).resolve().parent.parent / ".venv" / "bin" / "slither")
-SOLC_ARTIFACTS = Path("/mnt/data/Sem3 project/.venv/.solc-select/artifacts")
+# Use env vars for portability, fallback to local .venv
+SLITHER_BIN = os.getenv("PATHFINDER_SLITHER_BIN") or shutil.which("slither") or str(
+    Path(__file__).resolve().parent.parent / ".venv" / "bin" / "slither"
+)
+SOLC_ARTIFACTS = Path(
+    os.getenv("PATHFINDER_SOLC_ARTIFACTS")
+    or "/home/frost-walk/Research/Sem3 project/.venv/.solc-select/artifacts"
+)
 SOLC_LOCK = "/tmp/solc_select.lock"
 
 

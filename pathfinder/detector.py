@@ -1,3 +1,4 @@
+import os
 import z3
 from slither.detectors.abstract_detector import AbstractDetector, DetectorClassification
 from slither.slithir.operations import (
@@ -35,6 +36,16 @@ class PathFinderDetector(AbstractDetector):
     INIT_MODIFIER_NAMES = {"initializer", "onlyinitializing", "reinitializer"}
 
     def _detect(self):
+        # Read configuration from environment variables
+        self.use_z3 = os.getenv("PATHFINDER_Z3", "1") == "1"
+        self.use_mutex = os.getenv("PATHFINDER_PPT_MUTEX", "1") == "1"
+        self.use_auth = os.getenv("PATHFINDER_PPT_AUTH", "1") == "1"
+        self.use_init = os.getenv("PATHFINDER_PPT_INIT", "1") == "1"
+        self.use_cei = os.getenv("PATHFINDER_PPT_CEI", "1") == "1"
+        self.use_inherit = os.getenv("PATHFINDER_PPT_INHERIT", "1") == "1"
+        self.use_xcfg = os.getenv("PATHFINDER_XCFG", "1") == "1"
+        self.z3_timeout_ms = int(os.getenv("PATHFINDER_Z3_TIMEOUT_MS", "5000"))
+
         results = []
         # Precompute call graph once
         self._call_graph, self._unknown_calls = self._build_call_graph()
@@ -170,29 +181,43 @@ class PathFinderDetector(AbstractDetector):
                     break
 
                 # --- Single-contract Z3 (Step 2) ---
-                path_constraints = self._collect_path_conditions(function)
-                z3_result = self._check_z3(path_constraints)
-                print(f"[DEBUG] {contract_name}.{function.name} "
-                      f"single z3={z3_result}")
+                if self.use_z3:
+                    path_constraints = self._collect_path_conditions(function)
+                    z3_result = self._check_z3(path_constraints)
+                    print(f"[DEBUG] {contract_name}.{function.name} "
+                          f"single z3={z3_result}")
 
-                if z3_result == "SAT":
+                    if z3_result == "SAT":
+                        info = [
+                            f"Reentrancy (single-contract, Path Feasible): "
+                            f"external call in {function.name} followed by "
+                            f"state write in {later_node}.\\n"
+                        ]
+                        findings.append(self.generate_result(info, node))
+                        # Still attempt cross-contract analysis as well
+                        if self.use_xcfg:
+                            findings.extend(
+                                self._cross_contract_analysis(function, node, later_node)
+                            )
+                    elif z3_result == "UNKNOWN":
+                        info = [
+                            f"Reentrancy (single-contract, Path UNKNOWN): "
+                            f"external call in {function.name} followed by "
+                            f"state write in {later_node}. Solver unknown.\\n"
+                        ]
+                        findings.append(self.generate_result(info, node))
+                else:
+                    # Z3 disabled: report as potential reentrancy (conservative)
                     info = [
-                        f"Reentrancy (single-contract, Path Feasible): "
+                        f"Reentrancy (single-contract, Z3 disabled): "
                         f"external call in {function.name} followed by "
-                        f"state write in {later_node}.\n"
+                        f"state write in {later_node}.\\n"
                     ]
                     findings.append(self.generate_result(info, node))
-                    # Still attempt cross-contract analysis as well
-                    findings.extend(
-                        self._cross_contract_analysis(function, node, later_node)
-                    )
-                elif z3_result == "UNKNOWN":
-                    info = [
-                        f"Reentrancy (single-contract, Path UNKNOWN): "
-                        f"external call in {function.name} followed by "
-                        f"state write in {later_node}. Solver unknown.\n"
-                    ]
-                    findings.append(self.generate_result(info, node))
+                    if self.use_xcfg:
+                        findings.extend(
+                            self._cross_contract_analysis(function, node, later_node)
+                        )
 
                 break
 
@@ -262,7 +287,7 @@ class PathFinderDetector(AbstractDetector):
                     f"Reentrancy (cross-contract, Path Feasible): "
                     f"{contract.name}.{function.name} external call -> "
                     f"{target_contract_name}.{target_fn_name} ({kind}) "
-                    f"writes {target_write_node}.\n"
+                    f"writes {target_write_node}.\\n"
                 ]
                 findings.append(self.generate_result(info, call_node))
             elif z3_result == "UNKNOWN":
@@ -270,7 +295,7 @@ class PathFinderDetector(AbstractDetector):
                     f"Reentrancy (cross-contract, Path UNKNOWN): "
                     f"{contract.name}.{function.name} -> "
                     f"{target_contract_name}.{target_fn_name} ({kind}). "
-                    f"Solver unknown.\n"
+                    f"Solver unknown.\\n"
                 ]
                 findings.append(self.generate_result(info, call_node))
 
@@ -281,6 +306,8 @@ class PathFinderDetector(AbstractDetector):
     # ======================================================================
 
     def _has_mutex_protection(self, function, call_node):
+        if not self.use_mutex:
+            return False
         for mod in function.modifiers:
             if mod.name.lower() in self.MUTEX_MODIFIER_NAMES:
                 return True
@@ -361,6 +388,8 @@ class PathFinderDetector(AbstractDetector):
         return False
 
     def _has_auth_protection(self, function, call_node):
+        if not self.use_auth:
+            return False
         for mod in function.modifiers:
             if mod.name.lower() in self.AUTH_MODIFIER_NAMES:
                 return True
@@ -398,6 +427,8 @@ class PathFinderDetector(AbstractDetector):
         return False
 
     def _has_init_protection(self, function, call_node):
+        if not self.use_init:
+            return False
         for mod in function.modifiers:
             if mod.name.lower() in self.INIT_MODIFIER_NAMES:
                 return True
@@ -433,6 +464,8 @@ class PathFinderDetector(AbstractDetector):
         return False
 
     def _has_cei_protection(self, function, call_node, write_node):
+        if not self.use_cei:
+            return False
         written_names = set()
         for ir in write_node.all_slithir_operations():
             lval = getattr(ir, "lvalue", None)
@@ -572,7 +605,7 @@ class PathFinderDetector(AbstractDetector):
 
     def _check_z3(self, constraints):
         s = z3.Solver()
-        s.set("timeout", 5000)
+        s.set("timeout", self.z3_timeout_ms)
         for c in constraints:
             s.add(c)
         result = s.check()
