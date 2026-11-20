@@ -1,9 +1,10 @@
 from celery import Celery
+import os
 
 app = Celery(
     "pathfinder",
-    broker="redis://localhost:6379/0",
-    backend="redis://localhost:6379/1",
+    broker=os.getenv("PATHFINDER_REDIS_BROKER", "redis://localhost:6379/0"),
+    backend=os.getenv("PATHFINDER_REDIS_BACKEND", "redis://localhost:6379/1"),
 )
 app.conf.update(
     worker_concurrency=12,

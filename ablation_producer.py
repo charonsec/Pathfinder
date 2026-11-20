@@ -16,10 +16,9 @@ import time
 
 RUN_ID = time.strftime("%Y%m%d-%H%M%S")
 
-SOLIDITY_DIR = Path(
-    os.getenv("PATHFINDER_DATASET_DIR")
-    or "/home/frost-walk/Research/Solidity"
-)
+def _get_solidity_dir() -> Path:
+    return Path(os.getenv("PATHFINDER_DATASET_DIR") or "/home/frost-walk/Research/Sem3 project/Solidity")
+
 OUT_CSV = Path("ablation_results.csv")
 
 CONFIGS = {
@@ -67,16 +66,20 @@ CONFIGS = {
 
 
 def _collect_files(limit: int | None) -> list[Path]:
-    files = sorted(SOLIDITY_DIR.glob("*.sol"))
+    files = sorted(_get_solidity_dir().glob("*.sol"))
     if limit is not None:
         files = files[:limit]
     return files
 
 
+def _get_solidity_dir() -> Path:
+    return Path(os.getenv("PATHFINDER_DATASET_DIR") or "/home/frost-walk/Research/Sem3 project/Solidity")
+
+
 def main(limit_files: int | None = None):
     files = _collect_files(limit_files)
     if not files:
-        print(f"ERROR: no .sol files found under {SOLIDITY_DIR}")
+        print(f"ERROR: no .sol files found under {_get_solidity_dir()}")
         sys.exit(1)
 
     total_jobs = len(files) * len(CONFIGS)

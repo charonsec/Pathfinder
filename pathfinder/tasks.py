@@ -11,10 +11,12 @@ from .celery_app import app
 SLITHER_BIN = os.getenv("PATHFINDER_SLITHER_BIN") or shutil.which("slither") or str(
     Path(__file__).resolve().parent.parent / ".venv" / "bin" / "slither"
 )
+# Check both project .venv and global solc-select locations
 SOLC_ARTIFACTS = Path(
     os.getenv("PATHFINDER_SOLC_ARTIFACTS")
     or "/home/frost-walk/Research/Sem3 project/.venv/.solc-select/artifacts"
 )
+GLOBAL_SOLC_ARTIFACTS = Path.home() / ".solc-select" / "artifacts"
 SOLC_LOCK = "/tmp/solc_select.lock"
 
 
@@ -24,13 +26,15 @@ def _solc_binary(version: str) -> Path | None:
     Handles both layouts:
       artifacts/solc-X.Y.Z            (flat, older solc-select)
       artifacts/solc-X.Y.Z/solc-X.Y.Z (nested, newer solc-select)
+    Checks both project and global solc-select locations.
     """
-    base = SOLC_ARTIFACTS / f"solc-{version}"
-    nested = base / f"solc-{version}"
-    if nested.is_file():
-        return nested
-    if base.is_file():
-        return base
+    for artifacts in (SOLC_ARTIFACTS, GLOBAL_SOLC_ARTIFACTS):
+        base = artifacts / f"solc-{version}"
+        nested = base / f"solc-{version}"
+        if nested.is_file():
+            return nested
+        if base.is_file():
+            return base
     return None
 
 
@@ -123,11 +127,18 @@ def run_slither(self, sol_file: str, config_name: str, config_env: dict,
         return {"file": sol_file, "config": config_name,
                 "status": "timeout", "findings": []}
 
-    if proc.returncode != 0 and "Compilation warnings" not in proc.stderr:
+    # Slither returns:
+    #   0 = no issues found
+    #   1 = issues found (but no compilation errors)
+    #   255 = issues found (legacy behavior)
+    # Other non-zero codes = compilation/runtime errors
+    findings = _parse_findings(proc.stdout, proc.stderr)
+    if proc.returncode not in (0, 1, 255):
+        # Actual compilation/runtime error
         return {"file": sol_file, "config": config_name,
                 "status": "compile_error",
                 "error": proc.stderr[-400:], "findings": []}
 
     return {"file": sol_file, "config": config_name, "status": "ok",
-            "findings": _parse_findings(proc.stdout, proc.stderr),
+            "findings": findings,
             "raw_stdout": proc.stdout[-2000:]}

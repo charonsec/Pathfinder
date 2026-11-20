@@ -165,19 +165,19 @@ class PathFinderDetector(AbstractDetector):
                 # --- Step 3 protections on the entry function ---
                 if self._has_mutex_protection(function, node):
                     print(f"[DEBUG] {contract_name}.{function.name} "
-                          f"suppressed by mutex protection")
+                          f"suppressed by mutex protection", flush=True)
                     break
                 if self._has_auth_protection(function, node):
                     print(f"[DEBUG] {contract_name}.{function.name} "
-                          f"suppressed by authorization protection")
+                          f"suppressed by authorization protection", flush=True)
                     break
                 if self._has_init_protection(function, node):
                     print(f"[DEBUG] {contract_name}.{function.name} "
-                          f"suppressed by initialization protection")
+                          f"suppressed by initialization protection", flush=True)
                     break
                 if self._has_cei_protection(function, node, later_node):
                     print(f"[DEBUG] {contract_name}.{function.name} "
-                          f"suppressed by CEI protection")
+                          f"suppressed by CEI protection", flush=True)
                     break
 
                 # --- Single-contract Z3 (Step 2) ---
@@ -185,7 +185,7 @@ class PathFinderDetector(AbstractDetector):
                     path_constraints = self._collect_path_conditions(function)
                     z3_result = self._check_z3(path_constraints)
                     print(f"[DEBUG] {contract_name}.{function.name} "
-                          f"single z3={z3_result}")
+                          f"single z3={z3_result}", flush=True)
 
                     if z3_result == "SAT":
                         info = [
@@ -269,7 +269,7 @@ class PathFinderDetector(AbstractDetector):
             if target_write_node is None:
                 print(f"[DEBUG-CROSS] {contract.name}.{function.name} -> "
                       f"{target_contract_name}.{target_fn_name} : "
-                      f"no sensitive write in target")
+                      f"no sensitive write in target", flush=True)
                 continue
 
             # Combine caller and target path constraints
@@ -280,7 +280,7 @@ class PathFinderDetector(AbstractDetector):
             z3_result = self._check_z3(all_constraints)
             print(f"[DEBUG-CROSS] {contract.name}.{function.name} -> "
                   f"{target_contract_name}.{target_fn_name} ({kind}) "
-                  f"z3={z3_result}")
+                  f"z3={z3_result}", flush=True)
 
             if z3_result == "SAT":
                 info = [
@@ -445,7 +445,7 @@ class PathFinderDetector(AbstractDetector):
                             and self._is_bool_const(rval, True)):
                         init_vars.add(lval.name)
         print(f"[DEBUG-INIT] {function.contract.name}.{function.name} "
-              f"init_vars={init_vars}")
+              f"init_vars={init_vars}", flush=True)
         if not init_vars:
             return False
         for n in nodes[:call_idx]:
@@ -475,7 +475,7 @@ class PathFinderDetector(AbstractDetector):
             if resolved:
                 written_names.add(resolved)
         print(f"[DEBUG-CEI] {function.contract.name}.{function.name} "
-              f"written_names={written_names}")
+              f"written_names={written_names}", flush=True)
         if not written_names:
             return False
         nodes = list(function.nodes)
@@ -488,7 +488,7 @@ class PathFinderDetector(AbstractDetector):
                     lname = self._resolve_var_name(ir.lvalue)
                     if lname in written_names and self._is_zero_const(ir.rvalue):
                         print(f"[DEBUG-CEI] {function.contract.name}.{function.name} "
-                              f"zeroed {lname} before call")
+                              f"zeroed {lname} before call", flush=True)
                         return True
         for n in nodes[:call_idx]:
             for ir in n.all_slithir_operations():
@@ -497,7 +497,7 @@ class PathFinderDetector(AbstractDetector):
                     rn = self._resolve_var_name(ir.variable_right)
                     if ln in written_names or rn in written_names:
                         print(f"[DEBUG-CEI] {function.contract.name}.{function.name} "
-                              f"checked {ln or rn} before call")
+                              f"checked {ln or rn} before call", flush=True)
                         return True
         return False
 
