@@ -1,6 +1,7 @@
 import fcntl
 import os
 import re
+import json
 import subprocess
 import shutil
 from pathlib import Path
@@ -14,7 +15,7 @@ SLITHER_BIN = os.getenv("PATHFINDER_SLITHER_BIN") or shutil.which("slither") or 
 # Check both project .venv and global solc-select locations
 SOLC_ARTIFACTS = Path(
     os.getenv("PATHFINDER_SOLC_ARTIFACTS")
-    or "/home/frost-walk/Research/Sem3 project/.venv/.solc-select/artifacts"
+    or str(Path.home() / ".solc-select" / "artifacts")
 )
 GLOBAL_SOLC_ARTIFACTS = Path.home() / ".solc-select" / "artifacts"
 SOLC_LOCK = "/tmp/solc_select.lock"
@@ -51,6 +52,20 @@ def _detect_pragma(sol_file: str) -> str | None:
 def _resolve_solc_path(pragma_expr: str | None) -> str | None:
     if not pragma_expr:
         return None
+    # Use solc-select to find the best matching version
+    try:
+        result = subprocess.run(
+            ["solc-select", "list", "--installed"],
+            capture_output=True, text=True, timeout=10
+        )
+        if result.returncode == 0:
+            installed = result.stdout.strip().split()
+            # Filter by pragma (simplified: use highest installed)
+            if installed:
+                return str(_solc_binary(installed[-1]))
+    except Exception:
+        pass
+    # Fallback: try regex extraction
     versions = re.findall(r"\d+\.\d+\.\d+", pragma_expr)
     if not versions:
         return None
@@ -90,12 +105,40 @@ def _ensure_installed(version: str) -> bool:
 
 def _parse_findings(stdout: str, stderr: str):
     findings = []
+    # First priority: parse structured JSON output (PATHFINDER_JSON:)
     for line in (stdout + "\n" + stderr).splitlines():
         line = line.strip()
-        if line.startswith("Reentrancy (single-contract"):
-            findings.append({"type": "single", "detail": line})
-        elif line.startswith("Reentrancy (cross-contract"):
-            findings.append({"type": "cross", "detail": line})
+        if line.startswith("PATHFINDER_JSON:"):
+            try:
+                json_str = line[len("PATHFINDER_JSON:"):]
+                record = json.loads(json_str)
+                # Only count SAT as positive finding
+                if record.get("sat_finding"):
+                    findings.append({
+                        "type": record.get("config", "single-contract"),
+                        "detail": record.get("detail", ""),
+                        "z3_result": record.get("z3_result"),
+                        "sat_finding": True,
+                        "unknown_finding": False
+                    })
+                elif record.get("unknown_finding"):
+                    findings.append({
+                        "type": record.get("config", "single-contract"),
+                        "detail": record.get("detail", ""),
+                        "z3_result": record.get("z3_result"),
+                        "sat_finding": False,
+                        "unknown_finding": True
+                    })
+            except json.JSONDecodeError:
+                pass
+    # Fallback: legacy human-readable parsing (for compatibility)
+    if not findings:
+        for line in (stdout + "\n" + stderr).splitlines():
+            line = line.strip()
+            if line.startswith("Reentrancy (single-contract"):
+                findings.append({"type": "single", "detail": line, "z3_result": "UNKNOWN", "sat_finding": False, "unknown_finding": False})
+            elif line.startswith("Reentrancy (cross-contract"):
+                findings.append({"type": "cross", "detail": line, "z3_result": "UNKNOWN", "sat_finding": False, "unknown_finding": False})
     return findings
 
 
@@ -104,8 +147,8 @@ def run_slither(self, sol_file: str, config_name: str, config_env: dict,
                 timeout: int = 60):
     env = os.environ.copy()
     for k, v in config_env.items():
-        env[f"PATHFINDER_{k}"] = v
-    env["PATHFINDER_Z3_TIMEOUT_MS"] = str(timeout * 1000)
+        env[k] = v
+    env["Z3_TIMEOUT_MS"] = str(timeout * 1000)
 
     cmd = [SLITHER_BIN, sol_file, "--detect", "pathfinder"]
 
@@ -139,6 +182,12 @@ def run_slither(self, sol_file: str, config_name: str, config_env: dict,
                 "status": "compile_error",
                 "error": proc.stderr[-400:], "findings": []}
 
+    # Extract structured finding data for evaluation CSV
+    sat_findings = [f for f in findings if f.get("sat_finding")]
+    unknown_findings = [f for f in findings if f.get("unknown_finding")]
+    
     return {"file": sol_file, "config": config_name, "status": "ok",
             "findings": findings,
+            "sat_count": len(sat_findings),
+            "unknown_count": len(unknown_findings),
             "raw_stdout": proc.stdout[-2000:]}

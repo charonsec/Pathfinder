@@ -7,7 +7,7 @@ app = Celery(
     backend=os.getenv("PATHFINDER_REDIS_BACKEND", "redis://localhost:6379/1"),
 )
 app.conf.update(
-    worker_concurrency=12,
+    worker_concurrency=int(os.getenv("PATHFINDER_CELERY_CONCURRENCY", "4")),
     task_acks_late=True,
     worker_prefetch_multiplier=1,
     task_time_limit=300,

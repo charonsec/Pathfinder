@@ -1,4 +1,6 @@
 import os
+import json
+import sys
 import z3
 from slither.detectors.abstract_detector import AbstractDetector, DetectorClassification
 from slither.slithir.operations import (
@@ -36,15 +38,19 @@ class PathFinderDetector(AbstractDetector):
     INIT_MODIFIER_NAMES = {"initializer", "onlyinitializing", "reinitializer"}
 
     def _detect(self):
-        # Read configuration from environment variables
-        self.use_z3 = os.getenv("PATHFINDER_Z3", "1") == "1"
-        self.use_mutex = os.getenv("PATHFINDER_PPT_MUTEX", "1") == "1"
-        self.use_auth = os.getenv("PATHFINDER_PPT_AUTH", "1") == "1"
-        self.use_init = os.getenv("PATHFINDER_PPT_INIT", "1") == "1"
-        self.use_cei = os.getenv("PATHFINDER_PPT_CEI", "1") == "1"
-        self.use_inherit = os.getenv("PATHFINDER_PPT_INHERIT", "1") == "1"
-        self.use_xcfg = os.getenv("PATHFINDER_XCFG", "1") == "1"
-        self.z3_timeout_ms = int(os.getenv("PATHFINDER_Z3_TIMEOUT_MS", "5000"))
+        # Read configuration from environment variables (no PATHFINDER_ prefix)
+        self.use_z3 = os.getenv("Z3", "1") == "1"
+        self.use_mutex = os.getenv("PPT_MUTEX", "1") == "1"
+        self.use_auth = os.getenv("PPT_AUTH", "1") == "1"
+        self.use_init = os.getenv("PPT_INIT", "1") == "1"
+        self.use_cei = os.getenv("PPT_CEI", "1") == "1"
+        self.use_inherit = os.getenv("PPT_INHERIT", "1") == "1"
+        self.use_xcfg = os.getenv("XCFG", "1") == "1"
+        self.z3_timeout_ms = int(os.getenv("Z3_TIMEOUT_MS", "5000"))
+
+        # DEBUG: verify env vars
+        import sys
+        print(f"DEBUG DETECTOR: Z3={os.getenv('Z3')}, MUTEX={os.getenv('PPT_MUTEX')}, AUTH={os.getenv('PPT_AUTH')}, INIT={os.getenv('PPT_INIT')}, CEI={os.getenv('PPT_CEI')}, INHERIT={os.getenv('PPT_INHERIT')}, XCFG={os.getenv('XCFG')}, TIMEOUT={os.getenv('Z3_TIMEOUT_MS')}", file=sys.stderr)
 
         results = []
         # Precompute call graph once
@@ -152,6 +158,7 @@ class PathFinderDetector(AbstractDetector):
         findings = []
         nodes = list(function.nodes)
         contract_name = function.contract.name if function.contract else "?"
+        file_path = function.contract.source_mapping.filename.absolute if function.contract and function.contract.source_mapping else "?"
 
         for i, node in enumerate(nodes):
             if not any(isinstance(ir, (LowLevelCall, HighLevelCall))
@@ -164,28 +171,31 @@ class PathFinderDetector(AbstractDetector):
 
                 # --- Step 3 protections on the entry function ---
                 if self._has_mutex_protection(function, node):
-                    print(f"[DEBUG] {contract_name}.{function.name} "
-                          f"suppressed by mutex protection", flush=True)
-                    break
+                    continue
                 if self._has_auth_protection(function, node):
-                    print(f"[DEBUG] {contract_name}.{function.name} "
-                          f"suppressed by authorization protection", flush=True)
-                    break
+                    continue
                 if self._has_init_protection(function, node):
-                    print(f"[DEBUG] {contract_name}.{function.name} "
-                          f"suppressed by initialization protection", flush=True)
-                    break
+                    continue
                 if self._has_cei_protection(function, node, later_node):
-                    print(f"[DEBUG] {contract_name}.{function.name} "
-                          f"suppressed by CEI protection", flush=True)
-                    break
+                    continue
 
                 # --- Single-contract Z3 (Step 2) ---
                 if self.use_z3:
-                    path_constraints = self._collect_path_conditions(function)
+                    path_constraints = self._collect_path_conditions(function, node)
                     z3_result = self._check_z3(path_constraints)
-                    print(f"[DEBUG] {contract_name}.{function.name} "
-                          f"single z3={z3_result}", flush=True)
+
+                    # Emit structured JSON for evaluation
+                    finding_record = {
+                        "file": str(file_path),
+                        "contract": contract_name,
+                        "function": function.name,
+                        "config": "single-contract",
+                        "z3_result": z3_result,
+                        "sat_finding": z3_result == "SAT",
+                        "unknown_finding": z3_result == "UNKNOWN",
+                        "detail": f"external call in {function.name} followed by state write in {later_node}"
+                    }
+                    print(f"PATHFINDER_JSON:{json.dumps(finding_record)}", file=sys.stderr)
 
                     if z3_result == "SAT":
                         info = [
@@ -199,13 +209,7 @@ class PathFinderDetector(AbstractDetector):
                             findings.extend(
                                 self._cross_contract_analysis(function, node, later_node)
                             )
-                    elif z3_result == "UNKNOWN":
-                        info = [
-                            f"Reentrancy (single-contract, Path UNKNOWN): "
-                            f"external call in {function.name} followed by "
-                            f"state write in {later_node}. Solver unknown.\\n"
-                        ]
-                        findings.append(self.generate_result(info, node))
+                    # UNKNOWN and UNSAT produce no finding (abstain / negative)
                 else:
                     # Z3 disabled: report as potential reentrancy (conservative)
                     info = [
@@ -219,7 +223,7 @@ class PathFinderDetector(AbstractDetector):
                             self._cross_contract_analysis(function, node, later_node)
                         )
 
-                break
+                # NOTE: removed 'break' to analyze all call sites in the function
 
         return findings
 
@@ -242,6 +246,7 @@ class PathFinderDetector(AbstractDetector):
             return []
 
         findings = []
+        file_path = contract.source_mapping.filename_absolute if contract else "?"
         for (target_contract_name, target_fn_name), kind in edges:
             target_contract = next(
                 (c for c in self.compilation_unit.contracts
@@ -267,20 +272,27 @@ class PathFinderDetector(AbstractDetector):
                     break
 
             if target_write_node is None:
-                print(f"[DEBUG-CROSS] {contract.name}.{function.name} -> "
-                      f"{target_contract_name}.{target_fn_name} : "
-                      f"no sensitive write in target", flush=True)
                 continue
 
             # Combine caller and target path constraints
-            caller_constraints = self._collect_path_conditions(function)
-            target_constraints = self._collect_path_conditions(target_fn)
+            caller_constraints = self._collect_path_conditions(function, call_node)
+            target_constraints = self._collect_path_conditions(target_fn, target_write_node)
             all_constraints = caller_constraints + target_constraints
 
             z3_result = self._check_z3(all_constraints)
-            print(f"[DEBUG-CROSS] {contract.name}.{function.name} -> "
-                  f"{target_contract_name}.{target_fn_name} ({kind}) "
-                  f"z3={z3_result}", flush=True)
+
+            # Emit structured JSON for evaluation
+            finding_record = {
+                "file": str(file_path),
+                "contract": contract.name,
+                "function": function.name,
+                "config": "cross-contract",
+                "z3_result": z3_result,
+                "sat_finding": z3_result == "SAT",
+                "unknown_finding": z3_result == "UNKNOWN",
+                "detail": f"{contract.name}.{function.name} external call -> {target_contract_name}.{target_fn_name} ({kind}) writes {target_write_node}"
+            }
+            print(f"PATHFINDER_JSON:{json.dumps(finding_record)}", file=sys.stderr)
 
             if z3_result == "SAT":
                 info = [
@@ -290,14 +302,7 @@ class PathFinderDetector(AbstractDetector):
                     f"writes {target_write_node}.\\n"
                 ]
                 findings.append(self.generate_result(info, call_node))
-            elif z3_result == "UNKNOWN":
-                info = [
-                    f"Reentrancy (cross-contract, Path UNKNOWN): "
-                    f"{contract.name}.{function.name} -> "
-                    f"{target_contract_name}.{target_fn_name} ({kind}). "
-                    f"Solver unknown.\\n"
-                ]
-                findings.append(self.generate_result(info, call_node))
+            # UNKNOWN and UNSAT produce no finding (abstain / negative)
 
         return findings
 
@@ -348,8 +353,6 @@ class PathFinderDetector(AbstractDetector):
                 continue
             mod_lock = self._modifier_defines_lock(mod)
             if mod_lock:
-                print(f"[DEBUG-INHERIT] {function.contract.name}.{function.name} "
-                      f"modifier {mod.name} contains lock pattern ({mod_lock})")
                 return True
             if self._modifier_has_nested_guard(mod, depth + 1):
                 return True
@@ -394,8 +397,6 @@ class PathFinderDetector(AbstractDetector):
             if mod.name.lower() in self.AUTH_MODIFIER_NAMES:
                 return True
             if self._modifier_body_checks_msg_sender(mod):
-                print(f"[DEBUG-INHERIT] {function.contract.name}.{function.name} "
-                      f"modifier {mod.name} checks msg.sender")
                 return True
         nodes = list(function.nodes)
         call_idx = next((idx for idx, n in enumerate(nodes) if n == call_node), None)
@@ -444,8 +445,6 @@ class PathFinderDetector(AbstractDetector):
                     if (isinstance(lval, StateVariable)
                             and self._is_bool_const(rval, True)):
                         init_vars.add(lval.name)
-        print(f"[DEBUG-INIT] {function.contract.name}.{function.name} "
-              f"init_vars={init_vars}", flush=True)
         if not init_vars:
             return False
         for n in nodes[:call_idx]:
@@ -474,30 +473,21 @@ class PathFinderDetector(AbstractDetector):
             resolved = self._resolve_var_name(lval)
             if resolved:
                 written_names.add(resolved)
-        print(f"[DEBUG-CEI] {function.contract.name}.{function.name} "
-              f"written_names={written_names}", flush=True)
         if not written_names:
             return False
         nodes = list(function.nodes)
         call_idx = next((idx for idx, n in enumerate(nodes) if n == call_node), None)
         if call_idx is None:
             return False
+        # True CEI: the SAME state variable is WRITTEN (assigned) before the external call.
+        # A mere comparison (require, >=, ==) is a guard, not CEI.
         for n in nodes[:call_idx]:
             for ir in n.all_slithir_operations():
                 if isinstance(ir, Assignment):
                     lname = self._resolve_var_name(ir.lvalue)
-                    if lname in written_names and self._is_zero_const(ir.rvalue):
-                        print(f"[DEBUG-CEI] {function.contract.name}.{function.name} "
-                              f"zeroed {lname} before call", flush=True)
-                        return True
-        for n in nodes[:call_idx]:
-            for ir in n.all_slithir_operations():
-                if isinstance(ir, Binary) and ir.type in self.COMPARISON_OPS:
-                    ln = self._resolve_var_name(ir.variable_left)
-                    rn = self._resolve_var_name(ir.variable_right)
-                    if ln in written_names or rn in written_names:
-                        print(f"[DEBUG-CEI] {function.contract.name}.{function.name} "
-                              f"checked {ln or rn} before call", flush=True)
+                    if lname in written_names:
+                        # Check if it's a meaningful state update (not just zeroing)
+                        # Zeroing before call IS CEI (e.g., balances[msg.sender] = 0)
                         return True
         return False
 
@@ -570,14 +560,44 @@ class PathFinderDetector(AbstractDetector):
         except (ValueError, TypeError):
             return raw is value
 
-    def _collect_path_conditions(self, function):
+    def _collect_path_conditions(self, function, call_node=None):
+        """
+        Collect path conditions that dominate the external call.
+        If call_node is None, returns empty list (conservative: no constraints = SAT).
+        Uses CFG dominance: only constraints from nodes that dominate the call_node
+        are on all paths to the call, so they are guaranteed to be checked.
+        """
         constraints = []
+
+        if call_node is None:
+            return constraints
+
+        # Get nodes that dominate the call_node (on ALL paths to the call)
+        try:
+            dominators = call_node.dominators
+        except AttributeError:
+            return constraints
+
+        # Include the call_node itself (in case it has require/if)
+        dominating_nodes = set(dominators)
+        dominating_nodes.add(call_node)
+
         for node in function.nodes:
+            if node not in dominating_nodes:
+                continue
             for ir in node.all_slithir_operations():
-                if isinstance(ir, Binary) and ir.type in self.COMPARISON_OPS:
+                # Collect require() calls
+                if isinstance(ir, SolidityCall) and "require" in ir.function.name:
+                    for arg in ir.arguments:
+                        z3_expr = self._expr_to_z3(arg)
+                        if z3_expr is not None:
+                            constraints.append(z3_expr)
+                # Collect if conditions (binary comparisons in conditionals)
+                elif isinstance(ir, Binary) and ir.type in self.COMPARISON_OPS:
                     z3_expr = self._binary_to_z3(ir)
                     if z3_expr is not None:
                         constraints.append(z3_expr)
+
         return constraints
 
     def _binary_to_z3(self, binary):
@@ -590,17 +610,46 @@ class PathFinderDetector(AbstractDetector):
             return None
         return z3_op(left, right)
 
+    def _expr_to_z3(self, expr):
+        """Convert arbitrary SlithIR expression to Z3 constraint."""
+        if expr is None:
+            return None
+        # Binary comparison
+        if isinstance(expr, Binary) and expr.type in self.COMPARISON_OPS:
+            return self._binary_to_z3(expr)
+        # Boolean variable (e.g., a flag)
+        if hasattr(expr, "type") and "bool" in str(expr.type).lower():
+            name = getattr(expr, "name", None)
+            if name:
+                return z3.Bool(name)
+        # Try as operand
+        return self._operand_to_z3(expr)
+
     def _operand_to_z3(self, operand):
         if operand is None:
             return None
+        # Literal value
         if hasattr(operand, "value") and not hasattr(operand, "name"):
             try:
-                return z3.IntVal(int(operand.value))
+                val = operand.value
+                # Boolean literal
+                if isinstance(val, str) and val.lower() in ("true", "false"):
+                    return z3.BoolVal(val.lower() == "true")
+                # Integer literal
+                return z3.IntVal(int(val))
             except (ValueError, TypeError):
                 return None
         name = getattr(operand, "name", None)
         if not name:
             return None
+        # Type-aware variable encoding
+        # Booleans
+        if hasattr(operand, "type") and "bool" in str(operand.type).lower():
+            return z3.Bool(name)
+        # Addresses (160-bit)
+        if hasattr(operand, "type") and "address" in str(operand.type).lower():
+            return z3.BitVec(name, 160)
+        # Default: integer
         return z3.Int(name)
 
     def _check_z3(self, constraints):
