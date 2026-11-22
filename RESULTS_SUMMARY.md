@@ -40,12 +40,14 @@
 2. **Only AUTH suppressor hurts** — `full_no_auth` drops F1 to 0.868 (adds 1 FP, no TP gain)
 3. **Mutex/CEI/Inherit/Init = zero unique contribution** — removing any doesn't change TP/FP/FN
 4. **PPTs suppress 67 FPs** (z3_only 80 → full 13 finding-level) **but lose 47 TPs** — net contract-level F1 +0.147
-5. **3 FNs across ALL configs** — same 3 contracts missed entirely:
-   - 0x0fb6ef1d... (SafeBank: CEI-like but log call after)
-   - 0x4c67b3db... (ArbitraryCaller: cross-contract proxy pattern)
-   - 0xb5766f61... (BountyHunt: modifier check AFTER call)
+5. **3 FNs across ALL configs** — same 3 contracts:
+   - 0x0fb6ef1d... (SafeBank, solc 0.6.0): CEI-like pattern, log call after external call — needs solc 0.6.0
+   - 0x4c67b3db... (ArbitraryCaller, solc 0.5.16): Cross-contract proxy pattern — needs solc 0.5.16
+   - 0xb5766f61... (BountyHunt): Modifier check AFTER call — **NOW DETECTED** with current code
 6. **Cross-contract: 0 findings** — XCFG adds no value on ScBench
 7. **Abstain rate: 0%** — no Z3 UNKNOWN
+
+> **Note on 3 FNs:** The first two require solc 0.6.0 and 0.5.16 respectively (celery auto-switching handles this). The third (BountyHunt) is now detected with the fixed detector. Earlier FN results came from celery workers running stale detector code.
 
 ---
 
@@ -72,7 +74,7 @@ Dev set has severe class imbalance (1560 non-vuln vs 632 vuln finding-level rows
 
 | Priority | Task | Status |
 |----------|------|--------|
-| 1 | Error analysis on 3 FNs (why missed) | **In Progress** |
-| 2 | Install/run Mythril & Securify baselines | **In Progress** |
+| 1 | Re-run test set with fresh celery workers (solc auto-switching) | **Pending** |
+| 2 | Install/run Mythril baseline (if feasible) | **Pending** |
 | 3 | Update synopsis with test-set results + baseline comparison | Ready |
 | 4 | GitHub push + Docker artifact | Ready |
