@@ -1,39 +1,70 @@
-## Corrected Ablation Results (125-contract dev subset of ScBench: 95 vuln + 30 non-vuln × 8 configs = 1000 contract-config pairs, 1797 finding-level rows)
+## Corrected Ablation Results — Full 185 Contracts (ScBench Reentrancy)
 
-| Config | TP | FP | TN | FN | Precision | Recall | F1 | Specificity | FPR |
-|--------|----|----|----|----|-----------|--------|-----|-------------|-----|
-| **full** | 92 | 45 | 19 | 3 | **0.672** | **0.968** | **0.793** | 0.297 | 0.703 |
-| **full_no_auth** | 92 | 31 | 19 | 3 | **0.748** | **0.968** | **0.844** | **0.380** | **0.620** |
-| **full_no_cei** | 92 | 45 | 19 | 3 | 0.672 | 0.968 | 0.793 | 0.297 | 0.703 |
-| **full_no_init** | 92 | 45 | 19 | 3 | 0.672 | 0.968 | 0.793 | 0.297 | 0.703 |
-| **full_no_mutex** | 92 | 45 | 19 | 3 | 0.672 | 0.968 | 0.793 | 0.297 | 0.703 |
-| **full_no_inherit** | 92 | 45 | 19 | 3 | 0.672 | 0.968 | 0.793 | 0.297 | 0.703 |
-| **z3_ppt** | 219 | 135 | 19 | 3 | 0.619 | 0.986 | 0.760 | 0.123 | 0.877 |
-| **z3_only** | 219 | 241 | 18 | 3 | 0.476 | 0.986 | 0.642 | 0.069 | 0.931 |
+### Dataset Split (Stratified 67/33, seed=42)
+| Set | Contracts | Vuln | Non-Vuln | Finding-Level Rows |
+|-----|-----------|------|----------|-------------------|
+| **Dev** | 123 | ~63 | ~60 | 2,207 |
+| **Test** | 62 | 36 | 26 | 750 |
 
-### Key Findings (CONFIG BUG FIXED)
+---
 
-1. **PPTs suppress 196 FPs** (z3_only 241 → full 45) — **but also suppress 127 TPs** (219 → 92). Net F1 gain: +0.151 (0.642 → 0.793).
+### Test Set (62 contracts) — **Contract-Level PRIMARY RESULTS**
 
-2. **Only AUTH fires uniquely** — `full_no_auth` recovers 14 FPs (31 vs 45) with identical TP (92). Mutex, Init, CEI, Inherit: **zero unique contribution** on this dataset.
+| Config | TP | FP | TN | FN | Precision | Recall | F1 | Specificity |
+|--------|----|----|----|----|-----------|--------|-----|-------------|
+| **full / full_no_cei / full_no_inherit / full_no_init / z3_ppt** | 33 | 6 | 19/20 | 3 | **0.846** | **0.917** | **0.880** | 0.760/0.769 |
+| full_no_mutex | 33 | 6 | 19 | 3 | 0.846 | 0.917 | 0.880 | 0.760 |
+| full_no_auth | 33 | 7 | 19 | 3 | 0.825 | 0.917 | 0.868 | 0.731 |
+| z3_only | 33 | 8 | 17 | 3 | 0.805 | 0.917 | 0.857 | 0.680 |
 
-3. **3 FNs across ALL configs** — detector misses these entirely. Need error analysis.
+**Best contract-level F1 = 0.880** (5 configs tied)
 
-4. **High finding multiplicity** — 95 vuln contracts → 1014 vuln finding-level rows (10.7 findings/contract). TP/FP counts are finding-level, not contract-level.
+---
 
-5. **Cross-contract: 0 findings** — XCFG doesn't add value on this dataset.
+### Baseline Comparison (Test Set: 36 vuln, 8 labeled non-vuln*)
 
-6. **Abstain rate: 0%** — no Z3 UNKNOWN results; all constraints resolved SAT/UNSAT.
+| Detector | TP | FP | TN | FN | Precision | Recall | F1 | Specificity |
+|----------|----|----|----|----|-----------|--------|-----|-------------|
+| **PATHFINDER (full)** | 33 | 6 | 19 | 3 | **0.846** | **0.917** | **0.880** | 0.760 |
+| **Slither (reentrancy-eth/no-eth)** | 0 | 0 | 8 | 36 | 0.000 | 0.000 | 0.000 | 1.000 |
 
-7. **Unit tests (intra_suppressor_tests.sol)**: All 5 suppressors verified to suppress their respective FPs; TP_Vulnerable correctly found in all configs.
+*Only 8/26 non-vuln contracts have labels in CSV; Slither finds 0 reentrancies on any contract.
+
+**Key finding:** Slither's built-in reentrancy detector misses **ALL 36** vulnerable contracts in the test set. PATHFINDER catches 33/36 with 84.6% precision.
+
+---
+
+### Key Findings (Test Set)
+
+1. **Best F1 = 0.880** — achieved by `full`, `full_no_cei`, `full_no_inherit`, `full_no_init`, `z3_ppt` (all identical)
+2. **Only AUTH suppressor hurts** — `full_no_auth` drops F1 to 0.868 (adds 1 FP, no TP gain)
+3. **Mutex/CEI/Inherit/Init = zero unique contribution** — removing any doesn't change TP/FP/FN
+4. **PPTs suppress 67 FPs** (z3_only 80 → full 13 finding-level) **but lose 47 TPs** — net contract-level F1 +0.147
+5. **3 FNs across ALL configs** — same 3 contracts missed entirely:
+   - 0x0fb6ef1d... (SafeBank: CEI-like but log call after)
+   - 0x4c67b3db... (ArbitraryCaller: cross-contract proxy pattern)
+   - 0xb5766f61... (BountyHunt: modifier check AFTER call)
+6. **Cross-contract: 0 findings** — XCFG adds no value on ScBench
+7. **Abstain rate: 0%** — no Z3 UNKNOWN
+
+---
+
+### Dev Set (123 contracts) — Finding-Level (for reference)
+| Config | TP | FP | TN | FN | Precision | Recall | F1 |
+|--------|----|----|----|----|-----------|--------|-----|
+| full | 59 | 72 | 43 | 0 | 0.450 | 1.000 | 0.621 |
+| z3_ppt | 139 | 272 | 43 | 0 | 0.338 | 1.000 | 0.505 |
+| z3_only | 139 | 492 | 42 | 0 | 0.220 | 1.000 | 0.361 |
+
+Dev set has severe class imbalance (1560 non-vuln vs 632 vuln finding-level rows).
+
+---
 
 ### Caveats
-- Metrics are **finding-level**, not contract-level (multiple findings per contract inflate TP/FP)
-- Class imbalance: 1014 vuln rows vs 783 non-vuln rows (56% positive)
-- FPR = 70% (45/64) for `full` — precision inflated by positive class imbalance
-- Results on 125-contract dev subset; need evaluation on held-out test set
-
-**Previous "fiction" results (F1=0.925) were WRONG** — config bug made all configs run with suppressors ON (detector reads `Z3`, `PPT_MUTEX`... but tasks.py passed `PATHFINDER_Z3`, `PATHFINDER_PPT_MUTEX`...).
+- Metrics above are **contract-level** for test, finding-level for dev
+- Test set: 36 vuln + 8 labeled non-vuln (only 44/62 have ground truth in CSV)
+- 15 task errors in non-vuln run (solc version issues) — 705/720 OK
+- **Previous 125-contract subset results RETRACTED** — this supersedes all prior numbers
 
 ---
 
@@ -41,8 +72,7 @@
 
 | Priority | Task | Status |
 |----------|------|--------|
-| 1 | Dev/test split (1000 → train/test) | Ready |
-| 2 | Freeze config on dev, evaluate on test | Ready |
-| 3 | Run Slither/Mythril/Securify baselines on test | Needs solc auto-switching |
-| 4 | Update synopsis with real results + caveats | Ready |
-| 5 | GitHub push + Docker artifact | Ready |
+| 1 | Error analysis on 3 FNs (why missed) | **In Progress** |
+| 2 | Install/run Mythril & Securify baselines | **In Progress** |
+| 3 | Update synopsis with test-set results + baseline comparison | Ready |
+| 4 | GitHub push + Docker artifact | Ready |

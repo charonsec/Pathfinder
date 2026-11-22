@@ -13,6 +13,11 @@ import csv
 import pandas as pd
 from pathlib import Path
 import sys
+import argparse
+
+parser = argparse.ArgumentParser()
+parser.add_argument("--input", default="ablation_combined_fixed.csv", help="Input CSV file")
+args = parser.parse_args()
 
 # Load ground truth labels
 labels_path = Path("sc-developer-study-1/Empirical Evaluation of Security Analyzers/Tools_Labels/Reentrancy_labels.csv")
@@ -32,7 +37,7 @@ labels_df['addr'] = labels_df['contract_address'].apply(extract_addr)
 label_lookup = dict(zip(labels_df['addr'], labels_df['label']))
 
 # Load ablation results
-results_path = Path("ablation_combined_fixed.csv")
+results_path = Path(args.input)
 if not results_path.exists():
     print(f"ERROR: Results file not found at {results_path}")
     sys.exit(1)
