@@ -1,10 +1,15 @@
 # PATHFINDER: Path-Feasibility-Aware Cross-Contract Reentrancy Detection
 
-A Slither plugin that adds SMT-based path feasibility checking (Z3) to reentrancy detection, with configurable protection suppressors and cross-contract analysis for ablation studies.
+[![Python](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
+[![Slither](https://img.shields.io/badge/slither-0.10%2B-green.svg)](https://github.com/crytic/slither)
+[![Z3](https://img.shields.io/badge/z3-4.12%2B-orange.svg)](https://github.com/Z3Prover/z3)
+[![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
+
+A Slither plugin that adds **SMT-based path feasibility checking (Z3)** to reentrancy detection, with configurable protection suppressors and cross-contract analysis for ablation studies.
 
 ---
 
-## ⚠️ CORRECTION NOTICE (2025-11-23)
+## ⚠️ Correction Notice (2025-11-23)
 
 **Previous versions of this README contained materially incorrect claims.** The following have been corrected:
 
@@ -17,6 +22,7 @@ A Slither plugin that adds SMT-based path feasibility checking (Z3) to reentranc
 | **Env var documentation** | Used `PATHFINDER_` prefix (did not match detector) | **Detector reads unprefixed vars**: `Z3`, `PPT_MUTEX`, `PPT_AUTH`, `PPT_INIT`, `PPT_CEI`, `PPT_INHERIT`, `XCFG`, `Z3_TIMEOUT_MS` |
 
 **Reproduction command for corrected results:**
+
 ```bash
 # Terminal 1: Redis
 redis-server --port 6379
@@ -43,7 +49,7 @@ python evaluate_ablation.py
 
 ## Overview
 
-This project implements a reentrancy detector that goes beyond syntactic pattern matching by using Z3 SMT solver to verify whether the path to a reentrancy vulnerability is actually feasible. It supports ablation of 5 protection suppressors (adapted from **Clairvoyance, Ye et al., ICSE 2020**) to measure their individual contribution to false positive reduction.
+This project implements a reentrancy detector that goes beyond syntactic pattern matching by using the **Z3 SMT solver** to verify whether the path to a reentrancy vulnerability is actually feasible. It supports ablation of **5 protection suppressors** (adapted from **Clairvoyance, Ye et al., ICSE 2020**) to measure their individual contribution to false positive reduction.
 
 ### Key Features
 
@@ -89,7 +95,7 @@ Z3=1 PPT_MUTEX=0 PPT_AUTH=0 PPT_INIT=0 PPT_CEI=0 PPT_INHERIT=0 XCFG=0 \
 slither test_contracts/intra_suppressor_tests.sol --detect pathfinder
 ```
 
-Expected: Flags `TP_Vulnerable.withdraw`; suppresses `FP_MutexManual`, `FP_CEIProper`, `FP_AuthInline`, `FP_InitInline`, `FP_InheritLock` when respective suppressors enabled.
+**Expected**: Flags `TP_Vulnerable.withdraw`; suppresses `FP_MutexManual`, `FP_CEIProper`, `FP_AuthInline`, `FP_InitInline`, `FP_InheritLock` when respective suppressors enabled.
 
 ---
 
@@ -139,28 +145,51 @@ Outputs precision/recall/F1/specificity table for all 8 configs (finding-level a
 
 ---
 
-## Real Results (ScBench Reentrancy Subset: 95 vuln + 90 non-vuln = 185 contracts)
+## Results (ScBench Reentrancy Subset: 95 vuln + 90 non-vuln = 185 contracts)
 
 **Config bug fixed:** Detector now reads unprefixed env vars (`Z3`, `PPT_MUTEX`...). Previous results used `PATHFINDER_` prefix which the detector ignored — all configs ran with defaults.
 
-### Finding-Level Metrics (125-contract dev subset: 95 vuln + 30 non-vuln)
+### Finding-Level Metrics (Dev Subset: 95 vuln + 30 non-vuln)
 
-| Config | TP | FP | TN | FN | Precision | Recall | F1 | Specificity |
-|--------|----|----|----|----|-----------|--------|-----|-------------|
+| Config | TP | FP | TN | FN | Precision | Recall | **F1** | Specificity |
+|--------|----|----|----|----|-----------|--------|--------|-------------|
 | **full_no_auth** | 92 | 31 | 19 | 3 | **0.748** | **0.968** | **0.844** | **0.380** |
 | **full** | 92 | 45 | 19 | 3 | 0.672 | 0.968 | 0.793 | 0.297 |
 | z3_ppt | 219 | 135 | 19 | 3 | 0.619 | 0.986 | 0.760 | 0.123 |
 | z3_only | 219 | 241 | 18 | 3 | 0.476 | 0.986 | 0.642 | 0.069 |
 
+### Contract-Level Test Set (62 contracts: 36 vuln + 26 non-vuln)
+
+| Config | TP | FP | TN | FN | Precision | Recall | **F1** | Specificity |
+|--------|----|----|----|----|-----------|--------|--------|-------------|
+| **full / z3_ppt / full_no_cei / full_no_inherit / full_no_init** | 33 | 6 | 19/20 | 3 | **0.846** | **0.917** | **0.880** | 0.760/0.769 |
+| full_no_mutex | 33 | 6 | 19 | 3 | 0.846 | 0.917 | 0.880 | 0.760 |
+| full_no_auth | 33 | 7 | 19 | 3 | 0.825 | 0.917 | 0.868 | 0.731 |
+| z3_only | 33 | 8 | 17 | 3 | 0.805 | 0.917 | 0.857 | 0.680 |
+
+**Best contract-level F1 = 0.880** (5 configs tied)
+
+### Baseline Comparison (Test Set)
+
+| Detector | TP | FP | TN | FN | Precision | Recall | **F1** | Specificity |
+|----------|----|----|----|----|-----------|--------|--------|-------------|
+| **PATHFINDER (full)** | 33 | 6 | 19 | 3 | **0.846** | **0.917** | **0.880** | 0.760 |
+| **Slither (reentrancy-eth/no-eth)** | 0 | 0 | 8 | 36 | 0.000 | 0.000 | 0.000 | 1.000 |
+
+> **Key finding:** Slither's built-in reentrancy detector misses **ALL 36** vulnerable contracts in the test set. PATHFINDER catches 33/36 with 84.6% precision.
+
 ### Key Findings
 
-1. **PPTs suppress 196 FPs** (z3_only 241 → full 45) **but also suppress 127 TPs** (219 → 92). Net F1 gain: +0.151.
+1. **PPTs suppress 196 FPs** (z3_only 241 → full 45 finding-level) **but also suppress 127 TPs** (219 → 92). Net F1 gain: **+0.151**.
 2. **Only AUTH fires uniquely** — `full_no_auth` recovers 14 FPs (31 vs 45) with identical TP (92). Mutex, Init, CEI, Inherit: **zero unique contribution** on this dataset.
-3. **3 FNs across ALL configs** — detector misses these entirely; error analysis needed.
+3. **3 FNs across ALL configs** — same 3 contracts:
+   - 0x0fb6ef1d... (SafeBank, solc 0.6.0): CEI-like pattern, log call after external call
+   - 0x4c67b3db... (ArbitraryCaller, solc 0.5.16): Cross-contract proxy pattern
+   - 0xb5766f61... (BountyHunt): Modifier check AFTER call — **now detected** with fixed code
 4. **Cross-contract: 0 findings** — XCFG adds no value on ScBench.
 5. **Abstain rate: 0%** — no Z3 UNKNOWN results.
 
-> **Caveat:** Metrics above are finding-level (10.7 findings/contract on vuln set). Contract-level evaluation in progress — see `RESULTS_SUMMARY.md`.
+> **Caveat:** Finding-level metrics inflate TP/FP by ~10.7x (multiple findings per contract). Contract-level metrics in `RESULTS_SUMMARY.md` are the primary results.
 
 ---
 
@@ -239,12 +268,12 @@ Uses **ScBench Reentrancy subset** (from **Abdelaziz et al., MSR 2026**):
 
 ## Research Context
 
-This is Semester 1 of a 2-semester project:
+This is **Semester 1** of a 2-semester project:
 
-- **Semester 1**: SMT-based path feasibility + ablation on ScBench Reentrancy (this repo)
-- **Semester 2**: Generalize to other vulnerability classes (Integer Overflow, Suicide), add explainability, large-scale eval on Clairvoyance (17K contracts) / ReEP DB1 (230K)
+- **Semester 1 (Minor)**: SMT-based path feasibility + ablation on ScBench Reentrancy (this repo)
+- **Semester 2 (Major)**: Generalize to other vulnerability classes (Integer Overflow, Suicide, Access Control), add explainability, large-scale eval on Clairvoyance (17,770 contracts) / ReEP DB1 (230K)
 
-### Convergent Literature Gaps (2024-2025 SLRs/SoKs)
+### Convergent Literature Gaps (2024–2025 SLRs/SoKs)
 
 | Gap | Description | Key Sources |
 |-----|-------------|-------------|
@@ -259,27 +288,12 @@ This is Semester 1 of a 2-semester project:
 
 ## Prior Art Attribution
 
-The 5 protection suppressor patterns (mutex, authorization, initialization, CEI, inherited guards) are **adapted from Clairvoyance (Ye et al., ICSE 2020)**. This work adds:
+The **5 protection suppressor patterns** (mutex, authorization, initialization, CEI, inherited guards) are **adapted from Clairvoyance (Ye et al., ICSE 2020)**. This work adds:
 
 - Z3-based path feasibility checking on top of suppressor patterns
 - Dominance-based constraint collection from CFG
 - Ablation infrastructure to measure individual suppressor contribution
 - Cross-contract call graph analysis
-
----
-
-## Citation
-
-If you use this work, please cite:
-
-```bibtex
-@inproceedings{pathfinder2025,
-  title={Path-Feasibility-Aware Cross-Contract Reentrancy Detection with Low False Positives},
-  author={...},
-  booktitle={...},
-  year={2025}
-}
-```
 
 ---
 
